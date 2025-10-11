@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { createWorker, Worker } from 'tesseract.js';
 import { textClassifier } from "@/lib/textClassifier";
+import { startGamingAlarm, stopGamingAlarm } from "@/utils/beep";
 
 interface ActivityResult {
   activity: string;
@@ -20,13 +21,14 @@ interface Props {
   autoStart?: boolean;
 }
 
-const ScreenActivityDetector = ({ autoStart = true }: Props) => {
+const ScreenActivityDetector = ({ autoStart = false }: Props) => {
   const [isSharing, setIsSharing] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [activityResult, setActivityResult] = useState<ActivityResult | null>(null);
   const [lastOcrText, setLastOcrText] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [ocrStatus, setOcrStatus] = useState<string>("");
+  const [gamingDetectedCount, setGamingDetectedCount] = useState(0);
   
   const streamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -59,6 +61,9 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
   }, [autoStart]);
 
   const cleanup = async () => {
+    // Stop gaming alarm when cleaning up
+    stopGamingAlarm();
+    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -179,6 +184,7 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
     setActivityResult(null);
     setLastOcrText("");
     setOcrStatus("");
+    setGamingDetectedCount(0);
   };
 
   const startDetectionLoop = () => {
@@ -236,6 +242,28 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
           }
         });
 
+        // 🚨 GAMING DETECTION ALARM
+        // 🚨 NEW CODE - Alarm only stops when Studying or Coding detected
+if (result.class === "Gaming") {
+  setGamingDetectedCount(prev => prev + 1);
+  
+  // Start alarm and keep it running
+  startGamingAlarm();
+  console.log("🚨 GAMING DETECTED - CONTINUOUS ALARM ACTIVE!");
+  
+} else if (result.class === "Studying" || result.class === "Coding") {
+  // Only stop alarm when productive activity is detected
+  setGamingDetectedCount(0);
+  stopGamingAlarm();
+  console.log("✅ Productive activity detected - Alarm stopped");
+  
+} else {
+  // For any other state (unknown/error), keep alarm if it was running
+  // This ensures alarm doesn't stop accidentally
+  console.log("⚠️ Unknown activity - Alarm state unchanged");
+}
+
+
         setOcrStatus("Active - Next scan in 10s");
       } else {
         setOcrStatus("Not enough text detected");
@@ -288,6 +316,7 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
             <p>✅ OCR extracts on-screen text</p>
             <p>✅ AI detects: Studying / Coding / Gaming</p>
             <p>✅ Updates every 10 seconds</p>
+            <p>🚨 Alarm triggers if Gaming detected</p>
           </div>
         </div>
       ) : isInitializing ? (
@@ -313,6 +342,28 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
             </Button>
           </div>
 
+          {/* 🚨 GAMING WARNING BANNER */}
+          {activityResult?.activity === "Gaming" && (
+            <div className="p-4 bg-red-500/20 border-2 border-red-500 rounded-lg animate-pulse">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-6 w-6 text-red-300 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-bold text-red-300 text-lg">⚠️ GAMING DETECTED!</p>
+                  <p className="text-sm text-red-200 mt-1">
+                    Please return to studying immediately. Alarm is active.
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="flex items-center gap-1 text-xs text-red-300">
+                      <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse"></div>
+                      <span>Alarm: Active ({gamingDetectedCount} detection{gamingDetectedCount !== 1 ? 's' : ''})</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Current Activity Card */}
           {activityResult && (
             <div className={`p-4 rounded-lg bg-${getActivityColor()}-500/20 border-2 border-${getActivityColor()}-500`}>
               <div className="flex items-center justify-between mb-3">
@@ -331,6 +382,7 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
                 </div>
               </div>
 
+              {/* Probability Breakdown */}
               <div className="space-y-2 mt-3 pt-3 border-t border-white/10">
                 {Object.entries(activityResult.probabilities).map(([activity, prob]) => (
                   <div key={activity} className="space-y-1">
@@ -350,12 +402,21 @@ const ScreenActivityDetector = ({ autoStart = true }: Props) => {
             </div>
           )}
 
+          {/* Extracted Text Preview */}
           {lastOcrText && (
             <div className="p-3 bg-white/5 rounded text-xs font-mono text-white/60 max-h-20 overflow-y-auto">
               <p className="font-bold text-white/80 mb-1">📝 OCR Text:</p>
               {lastOcrText}
             </div>
           )}
+
+          {/* Info Footer */}
+          <div className="p-2 bg-white/5 rounded text-xs text-white/50 space-y-1">
+            <p>🔍 Using real OCR (Tesseract.js) + Your trained TF.js model</p>
+            <p>🔄 Auto-detects every 10 seconds</p>
+            <p>🧠 Model: /public/models/text-activity/model.json</p>
+            <p>🚨 Gaming alarm: Triple beep every 10s when gaming detected</p>
+          </div>
         </div>
       )}
     </div>

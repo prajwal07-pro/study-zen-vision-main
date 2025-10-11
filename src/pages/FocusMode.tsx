@@ -26,6 +26,7 @@ import {
 import FocusDetection from "@/components/FocusDetection";
 import ScreenActivityDetector from "@/components/ScreenActivityDetector";
 import AIFocusAssistant from "@/components/AIFocusAssistant";
+import QuizGenerator from "@/components/QuizGenerator";
 
 const FocusMode = () => {
   const navigate = useNavigate();
@@ -39,6 +40,7 @@ const FocusMode = () => {
   const [timeRemaining, setTimeRemaining] = useState(initialDuration);
   const [isPaused, setIsPaused] = useState(false);
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
+  const [showQuiz, setShowQuiz] = useState(false);
   
   // Section visibility toggles
   const [showCamera, setShowCamera] = useState(true);
@@ -47,8 +49,8 @@ const FocusMode = () => {
 
   // Countdown timer
   useEffect(() => {
-    if (isPaused || timeRemaining <= 0) {
-      if (timeRemaining <= 0 && !showCompletionDialog) {
+    if (isPaused || timeRemaining <= 0 || showQuiz) {
+      if (timeRemaining <= 0 && !showCompletionDialog && !showQuiz) {
         handleSessionComplete();
       }
       return;
@@ -64,19 +66,26 @@ const FocusMode = () => {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isPaused, timeRemaining, showCompletionDialog]);
+  }, [isPaused, timeRemaining, showCompletionDialog, showQuiz]);
 
   const handleSessionComplete = () => {
     setShowCompletionDialog(true);
+    
+    // Show celebration dialog for 3 seconds, then show quiz
+    setTimeout(() => {
+      setShowCompletionDialog(false);
+      setShowQuiz(true);
+    }, 3000);
   };
 
   const handleExit = () => {
-    if (confirm("Are you sure you want to exit Focus Mode?")) {
-      navigate("/");
+    if (confirm("Are you sure you want to exit Focus Mode? You can take a quiz to test what you learned!")) {
+      // Show quiz instead of going home directly
+      setShowQuiz(true);
     }
   };
 
-  const handleNewSession = () => {
+  const handleSkipQuiz = () => {
     navigate("/");
   };
 
@@ -98,6 +107,28 @@ const FocusMode = () => {
     return ((initialDuration - timeRemaining) / initialDuration) * 100;
   };
 
+  // Show Quiz Screen
+  if (showQuiz) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-6 flex items-center justify-center">
+        <div className="w-full max-w-4xl">
+          <QuizGenerator />
+          
+          <div className="text-center mt-6">
+            <Button 
+              onClick={handleSkipQuiz}
+              variant="outline"
+              className="text-white border-white/30 hover:bg-white/10"
+            >
+              Skip Quiz & Go Home
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main Focus Mode UI
   return (
     <>
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6">
@@ -271,7 +302,20 @@ const FocusMode = () => {
 
         {/* Footer Status */}
         <div className="max-w-7xl mx-auto mt-6">
-          
+          <Card className="bg-white/5 backdrop-blur-md border-white/10 p-4">
+            <div className="flex items-center justify-between text-sm text-white/60">
+              <div className="flex items-center gap-6">
+                <span>🎯 Focus Mode Active</span>
+                <span>📹 Camera: Monitoring</span>
+                <span>🖥️ Screen: Analyzing</span>
+                <span>🤖 AI: Ready</span>
+                <span>⏱️ Duration: {durationMinutes} min</span>
+              </div>
+              <div>
+                <span>Press Exit to take a quiz</span>
+              </div>
+            </div>
+          </Card>
         </div>
       </div>
 
@@ -287,25 +331,14 @@ const FocusMode = () => {
             </DialogTitle>
             <DialogDescription className="text-white/90 text-center text-lg">
               Congratulations! You've completed your {durationMinutes}-minute focus session.
-              Great job staying focused! 💪
+              <br />
+              <strong className="text-white">Now let's test what you learned!</strong>
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-3 mt-4">
-            <Button
-              onClick={handleNewSession}
-              size="lg"
-              className="bg-white text-green-600 hover:bg-gray-100"
-            >
-              Start New Session
-            </Button>
-            <Button
-              onClick={() => navigate("/")}
-              size="lg"
-              variant="outline"
-              className="border-white text-white hover:bg-white/10"
-            >
-              Back to Home
-            </Button>
+          <div className="text-center mt-4">
+            <p className="text-white/80 animate-pulse">
+              Preparing quiz...
+            </p>
           </div>
         </DialogContent>
       </Dialog>

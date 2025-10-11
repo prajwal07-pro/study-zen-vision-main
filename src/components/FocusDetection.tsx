@@ -103,8 +103,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
         
         // Check if focused with high confidence (>60%)
         const isFocused = 
-          topPrediction.className.toLowerCase() === "focused" && 
-          topPrediction.probability > 0.6;
+          topPrediction.className.toLowerCase().includes("focused");
         
         const confidence = topPrediction.probability;
 
