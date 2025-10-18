@@ -10,85 +10,148 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { 
-  Eye, 
-  Monitor, 
+import {
+  Eye,
+  Monitor,
   Bot,
-  Clock, 
-  X, 
+  Clock,
+  X,
   Pause,
   Play,
   ChevronDown,
   ChevronUp,
   AlertCircle,
-  CheckCircle
+  CheckCircle,
 } from "lucide-react";
 import FocusDetection from "@/components/FocusDetection";
 import ScreenActivityDetector from "@/components/ScreenActivityDetector";
 import AIFocusAssistant from "@/components/AIFocusAssistant";
 import QuizGenerator from "@/components/QuizGenerator";
+import { useToast } from "@/hooks/use-toast";
+
+// --- Firebase Imports ---
+import { collection, addDoc } from "firebase/firestore";
+import { db } from "../firebaseConfig"; // Your Firebase config file
 
 const FocusMode = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  
-  // Get duration from URL (in minutes), convert to seconds
+  const { toast } = useToast();
+
+  // --- Get data from URL ---
+  const userId = searchParams.get("userId");
   const durationMinutes = parseInt(searchParams.get("duration") || "25");
   const screenGranted = searchParams.get("screenGranted") === "true";
   const initialDuration = durationMinutes * 60;
-  
+
+  // --- State Management ---
+  const [sessionStartTime] = useState(new Date()); // Record session start time
   const [timeRemaining, setTimeRemaining] = useState(initialDuration);
   const [isPaused, setIsPaused] = useState(false);
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [showQuiz, setShowQuiz] = useState(false);
-  
+
   // Section visibility toggles
   const [showCamera, setShowCamera] = useState(true);
   const [showScreen, setShowScreen] = useState(true);
   const [showAssistant, setShowAssistant] = useState(true);
 
-  // Countdown timer
+  // --- Timer Logic ---
   useEffect(() => {
     if (isPaused || timeRemaining <= 0 || showQuiz) {
       if (timeRemaining <= 0 && !showCompletionDialog && !showQuiz) {
-        handleSessionComplete();
+        handleSessionEnd(true); // Call end function when timer reaches zero
       }
       return;
     }
 
     const interval = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          return 0;
-        }
-        return prev - 1;
-      });
+      setTimeRemaining((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
     return () => clearInterval(interval);
   }, [isPaused, timeRemaining, showCompletionDialog, showQuiz]);
 
-  const handleSessionComplete = () => {
-    setShowCompletionDialog(true);
-    
-    // Show celebration dialog for 3 seconds, then show quiz
-    setTimeout(() => {
-      setShowCompletionDialog(false);
-      setShowQuiz(true);
-    }, 3000);
-  };
 
-  const handleExit = () => {
-    if (confirm("Are you sure you want to exit Focus Mode? You can take a quiz to test what you learned!")) {
-      // Show quiz instead of going home directly
+  // --- Data Saving and Navigation ---
+
+  const handleSessionEnd = async (completed: boolean) => {
+    if (!userId) {
+      console.error("No user ID found, cannot save session.");
+      // If no user, just show the quiz without saving
+      setShowCompletionDialog(completed);
+      setTimeout(() => {
+        setShowCompletionDialog(false);
+        setShowQuiz(true);
+      }, completed ? 3000 : 0);
+      return;
+    }
+
+    try {
+      // Save the focus session data to Firestore
+      await addDoc(collection(db, `students/${userId}/focus_sessions`), {
+        startTime: sessionStartTime.toISOString(),
+        endTime: new Date().toISOString(),
+        durationMinutes: durationMinutes,
+        completed: completed,
+      });
+
+      if (completed) {
+        toast({ title: "Focus Session Saved!", description: "Great work!" });
+      }
+    } catch (error) {
+      console.error("Error saving focus session:", error);
+      toast({ variant: "destructive", title: "Save Error", description: "Could not save your focus session data." });
+    }
+
+    // Show completion dialog if finished, then transition to quiz
+    if (completed) {
+      setShowCompletionDialog(true);
+      setTimeout(() => {
+        setShowCompletionDialog(false);
+        setShowQuiz(true);
+      }, 3000);
+    } else {
+      // If exiting early, go straight to the quiz
       setShowQuiz(true);
     }
   };
 
-  const handleSkipQuiz = () => {
+  const handleQuizSubmit = async (topic: string, score: number, totalQuestions: number) => {
+    if (!userId) {
+      console.error("No user ID found, cannot save quiz result.");
+      navigate("/"); // Just go home if no user
+      return;
+    }
+
+    try {
+        // Save quiz result to Firestore
+        await addDoc(collection(db, `students/${userId}/quiz_results`), {
+            topic: topic,
+            score: score,
+            total: totalQuestions,
+            date: new Date().toISOString(),
+        });
+        toast({ title: "Quiz Result Saved!", description: `You scored ${score}/${totalQuestions}.` });
+    } catch (error) {
+        console.error("Error saving quiz result:", error);
+        toast({ variant: "destructive", title: "Save Error", description: "Could not save your quiz result." });
+    }
+
+    navigate("/"); // Navigate home after quiz submission
+  };
+
+  const handleExitEarly = () => {
+    if (confirm("Are you sure you want to exit? Your session will be marked as incomplete.")) {
+      handleSessionEnd(false);
+    }
+  };
+
+  const handleSkipQuizAndExit = () => {
     navigate("/");
   };
 
+  // --- UI Helper Functions ---
   const formatTime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -107,16 +170,15 @@ const FocusMode = () => {
     return ((initialDuration - timeRemaining) / initialDuration) * 100;
   };
 
-  // Show Quiz Screen
+  // --- Conditional Rendering for Quiz Screen ---
   if (showQuiz) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-6 flex items-center justify-center">
         <div className="w-full max-w-4xl">
-          <QuizGenerator />
-          
+          <QuizGenerator onQuizSubmit={handleQuizSubmit} />
           <div className="text-center mt-6">
-            <Button 
-              onClick={handleSkipQuiz}
+            <Button
+              onClick={handleSkipQuizAndExit}
               variant="outline"
               className="text-white border-white/30 hover:bg-white/10"
             >
@@ -128,12 +190,10 @@ const FocusMode = () => {
     );
   }
 
-  // Main Focus Mode UI
+  // --- Main Focus Mode UI ---
   return (
     <>
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6">
-        
-        {/* Header */}
         <div className="max-w-7xl mx-auto mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -147,9 +207,7 @@ const FocusMode = () => {
                 </Badge>
               </div>
             </div>
-
             <div className="flex items-center gap-4">
-              {/* Countdown Timer */}
               <Card className="bg-white/10 backdrop-blur-md border-white/20 px-8 py-4">
                 <div className="flex flex-col items-center">
                   <div className="flex items-center gap-2 text-white/70 text-sm mb-1">
@@ -159,11 +217,9 @@ const FocusMode = () => {
                   <span className={`text-4xl font-mono font-bold ${getTimeColor()}`}>
                     {formatTime(timeRemaining)}
                   </span>
-                  
-                  {/* Progress bar */}
                   <div className="w-full mt-2">
                     <div className="w-full bg-white/20 rounded-full h-2 overflow-hidden">
-                      <div 
+                      <div
                         className="bg-gradient-to-r from-green-400 to-blue-400 h-full transition-all duration-1000"
                         style={{ width: `${getProgressPercentage()}%` }}
                       />
@@ -171,39 +227,20 @@ const FocusMode = () => {
                   </div>
                 </div>
               </Card>
-
-              {/* Pause/Resume */}
               <Button
                 onClick={() => setIsPaused(!isPaused)}
                 size="lg"
                 className={isPaused ? "bg-green-500 hover:bg-green-600" : "bg-yellow-500 hover:bg-yellow-600"}
               >
-                {isPaused ? (
-                  <>
-                    <Play className="h-5 w-5 mr-2" />
-                    Resume
-                  </>
-                ) : (
-                  <>
-                    <Pause className="h-5 w-5 mr-2" />
-                    Pause
-                  </>
-                )}
+                {isPaused ? <Play className="h-5 w-5 mr-2" /> : <Pause className="h-5 w-5 mr-2" />}
+                {isPaused ? "Resume" : "Pause"}
               </Button>
-
-              {/* Exit */}
-              <Button
-                onClick={handleExit}
-                variant="destructive"
-                size="lg"
-              >
+              <Button onClick={handleExitEarly} variant="destructive" size="lg">
                 <X className="h-5 w-5 mr-2" />
                 Exit
               </Button>
             </div>
           </div>
-
-          {/* Warning if paused */}
           {isPaused && (
             <Card className="mt-4 bg-yellow-500/20 border-yellow-500 p-3">
               <div className="flex items-center gap-2 text-yellow-300">
@@ -214,93 +251,38 @@ const FocusMode = () => {
           )}
         </div>
 
-        {/* Main Content Grid */}
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          
-          {/* 1. Face Detection */}
           <Card className="bg-white/10 backdrop-blur-md border-white/20 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Eye className="h-5 w-5" />
-                Face Focus
-              </h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowCamera(!showCamera)}
-              >
+              <h2 className="text-xl font-bold flex items-center gap-2"><Eye className="h-5 w-5" /> Face Focus</h2>
+              <Button variant="ghost" size="sm" onClick={() => setShowCamera(!showCamera)}>
                 {showCamera ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </Button>
             </div>
-            
-            {showCamera && (
-              <>
-                <p className="text-white/70 mb-4 text-xs">
-                  Camera monitors attention. Alarm if distracted 15+ sec.
-                </p>
-                <FocusDetection 
-                  onDistractedTooLong={() => {
-                    console.log("Student distracted!");
-                  }}
-                />
-              </>
-            )}
+            {showCamera && <FocusDetection onDistractedTooLong={() => console.log("Student distracted!")} />}
           </Card>
 
-          {/* 2. Screen Activity Detection */}
           <Card className="bg-white/10 backdrop-blur-md border-white/20 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Monitor className="h-5 w-5" />
-                Screen Activity
-              </h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowScreen(!showScreen)}
-              >
+              <h2 className="text-xl font-bold flex items-center gap-2"><Monitor className="h-5 w-5" /> Screen Activity</h2>
+              <Button variant="ghost" size="sm" onClick={() => setShowScreen(!showScreen)}>
                 {showScreen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </Button>
             </div>
-            
-            {showScreen && (
-              <>
-                <p className="text-white/70 mb-4 text-xs">
-                  OCR + AI detects: Studying, Coding, Gaming
-                </p>
-                <ScreenActivityDetector autoStart={screenGranted} />
-              </>
-            )}
+            {showScreen && <ScreenActivityDetector autoStart={screenGranted} />}
           </Card>
 
-          {/* 3. AI Focus Assistant (Chatbot) */}
-          <Card className="bg-white/10 backdrop-blur-md border-white/20 p-6 xl:col-span-1 lg:col-span-2 xl:col-span-1">
+          <Card className="bg-white/10 backdrop-blur-md border-white/20 p-6 xl:col-span-1 lg:col-span-2">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Bot className="h-5 w-5" />
-                AI Assistant
-              </h2>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowAssistant(!showAssistant)}
-              >
+              <h2 className="text-xl font-bold flex items-center gap-2"><Bot className="h-5 w-5" /> AI Assistant</h2>
+              <Button variant="ghost" size="sm" onClick={() => setShowAssistant(!showAssistant)}>
                 {showAssistant ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </Button>
             </div>
-            
-            {showAssistant && (
-              <>
-                <p className="text-white/70 mb-4 text-xs">
-                  Voice or text - ask anything, AI responds
-                </p>
-                <AIFocusAssistant />
-              </>
-            )}
+            {showAssistant && <AIFocusAssistant />}
           </Card>
         </div>
 
-        {/* Footer Status */}
         <div className="max-w-7xl mx-auto mt-6">
           <Card className="bg-white/5 backdrop-blur-md border-white/10 p-4">
             <div className="flex items-center justify-between text-sm text-white/60">
@@ -319,27 +301,18 @@ const FocusMode = () => {
         </div>
       </div>
 
-      {/* Session Completion Dialog */}
-      <Dialog open={showCompletionDialog} onOpenChange={setShowCompletionDialog}>
+      <Dialog open={showCompletionDialog}>
         <DialogContent className="bg-gradient-to-br from-green-500 to-emerald-600 text-white border-none">
           <DialogHeader>
-            <div className="flex justify-center mb-4">
-              <CheckCircle className="h-16 w-16 text-white" />
-            </div>
-            <DialogTitle className="text-3xl text-center">
-              🎉 Session Complete!
-            </DialogTitle>
+            <div className="flex justify-center mb-4"><CheckCircle className="h-16 w-16 text-white" /></div>
+            <DialogTitle className="text-3xl text-center">🎉 Session Complete!</DialogTitle>
             <DialogDescription className="text-white/90 text-center text-lg">
               Congratulations! You've completed your {durationMinutes}-minute focus session.
               <br />
               <strong className="text-white">Now let's test what you learned!</strong>
             </DialogDescription>
           </DialogHeader>
-          <div className="text-center mt-4">
-            <p className="text-white/80 animate-pulse">
-              Preparing quiz...
-            </p>
-          </div>
+          <div className="text-center mt-4"><p className="text-white/80 animate-pulse">Preparing quiz...</p></div>
         </DialogContent>
       </Dialog>
     </>

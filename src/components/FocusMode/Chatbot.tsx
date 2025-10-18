@@ -27,7 +27,7 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  const genAI = new GoogleGenerativeAI("AIzaSyCuVmJQUcLrJzeRluBeuanoBQkTJXTUJnI");
+  const genAI = new GoogleGenerativeAI("AIzaSyAjsN7dYCGTJSpkDUX9ddvrBC7VtmKTGMA");
 
   useEffect(() => {
     scrollToBottom();
