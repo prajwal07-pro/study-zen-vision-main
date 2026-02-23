@@ -20,12 +20,12 @@ const TimeSelection = () => {
   const [screenError, setScreenError] = useState("");
   const [isRequestingScreen, setIsRequestingScreen] = useState(false);
 
+  // FIX: Added 15 back to the presets and adjusted the layout to fit 5 buttons perfectly
   const presetDurations = [15, 25, 45, 60, 90];
 
   const handleStart = () => {
     const duration = selectedMinutes || parseInt(customMinutes);
     if (duration && duration > 0) {
-      // Show screen sharing dialog
       setShowScreenDialog(true);
       setScreenError("");
     }
@@ -36,49 +36,29 @@ const TimeSelection = () => {
     setScreenError("");
 
     try {
-      // Request screen share with explicit "monitor" preference
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: "monitor", // Only allow entire screen
-        },
+        video: { displaySurface: "monitor" },
         audio: false,
         preferCurrentTab: false,
       });
 
-      // Check what was actually shared
       const videoTrack = stream.getVideoTracks()[0];
       const settings = videoTrack.getSettings();
-      
-      console.log("Screen share settings:", settings);
-
-      // Validate that entire screen was shared (not window or tab)
-      // @ts-ignore - displaySurface exists but not in TS types
       const displaySurface = settings.displaySurface || videoTrack.getConstraints().displaySurface;
       
       if (displaySurface !== "monitor") {
-        // User selected window or tab instead of entire screen
         stream.getTracks().forEach(track => track.stop());
-        
-        setScreenError(
-          `❌ You must share your ENTIRE SCREEN, not a window or tab. Please try again.`
-        );
+        setScreenError(`❌ You must share your ENTIRE SCREEN, not a window or tab. Please try again.`);
         setIsRequestingScreen(false);
         return;
       }
 
-      // Success! Entire screen was shared
-      console.log("✅ Entire screen shared successfully");
-      
-      // Stop the stream for now (will restart in FocusMode)
       stream.getTracks().forEach(track => track.stop());
-
-      // Navigate to Focus Mode with duration and screen permission granted
       const duration = selectedMinutes || parseInt(customMinutes);
       navigate(`/focus?duration=${duration}&screenGranted=true`);
 
     } catch (error: any) {
       console.error("Screen share error:", error);
-      
       if (error.name === "NotAllowedError") {
         setScreenError("❌ Screen sharing was denied. Please allow screen sharing to continue.");
       } else if (error.name === "NotFoundError") {
@@ -86,7 +66,6 @@ const TimeSelection = () => {
       } else {
         setScreenError(`❌ Error: ${error.message || "Screen sharing failed"}`);
       }
-      
       setIsRequestingScreen(false);
     }
   };
@@ -102,15 +81,13 @@ const TimeSelection = () => {
             <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               Focus Mode
             </h1>
-            <p className="text-muted-foreground">
-              Select your focus duration and stay productive
-            </p>
+            {/* FIX: Removed "Select your focus duration..." helper text */}
           </div>
 
-          {/* Quick Select */}
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">Quick Select</h2>
-            <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
+            {/* FIX: Used grid-cols-5 to ensure the 5 buttons fit perfectly in one row */}
+            <div className="grid grid-cols-5 gap-3">
               {presetDurations.map((minutes) => (
                 <Button
                   key={minutes}
@@ -129,7 +106,6 @@ const TimeSelection = () => {
             </div>
           </div>
 
-          {/* Or Divider */}
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t" />
@@ -139,7 +115,6 @@ const TimeSelection = () => {
             </div>
           </div>
 
-          {/* Custom Duration */}
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">Custom Duration</h2>
             <div className="flex gap-3">
@@ -159,7 +134,6 @@ const TimeSelection = () => {
             </div>
           </div>
 
-          {/* Start Button */}
           <Button
             onClick={handleStart}
             disabled={!(selectedMinutes || (customMinutes && parseInt(customMinutes) > 0))}
@@ -169,15 +143,10 @@ const TimeSelection = () => {
             Start Focus Session →
           </Button>
 
-          {/* Info */}
-          <div className="text-center text-sm text-muted-foreground space-y-1">
-            <p>⏱️ Choose your focus duration</p>
-            <p>👁️ Camera and screen monitoring will be activated</p>
-          </div>
+          {/* FIX: Removed the "Info" section with the camera/screen text at the bottom */}
         </Card>
       </div>
 
-      {/* Screen Share Request Dialog */}
       <Dialog open={showScreenDialog} onOpenChange={setShowScreenDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -188,21 +157,10 @@ const TimeSelection = () => {
               Share Your Entire Screen
             </DialogTitle>
             <DialogDescription className="text-center space-y-4">
+               {/* FIX: Removed the "Important Instructions" text block from here */}
               <p className="text-base">
                 For accurate activity detection, we need access to your <strong>ENTIRE SCREEN</strong>.
               </p>
-              
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 text-left space-y-2">
-                <p className="font-semibold text-yellow-700 dark:text-yellow-400 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4" />
-                  Important Instructions:
-                </p>
-                <ul className="text-sm space-y-1 text-yellow-800 dark:text-yellow-300">
-                  <li>✅ Select "<strong>Entire Screen</strong>" or "<strong>Your Entire Screen</strong>"</li>
-                  <li>❌ Do NOT select "Window" or "Tab"</li>
-                  <li>🖥️ Choose your primary monitor</li>
-                </ul>
-              </div>
 
               {screenError && (
                 <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-600 dark:text-red-400 text-sm">

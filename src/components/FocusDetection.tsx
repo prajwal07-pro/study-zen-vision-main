@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Camera, AlertCircle, CheckCircle2, Loader2, Bell } from "lucide-react";
+import { Camera, AlertCircle, CheckCircle2, Loader2, Bell, Eye } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import * as tmImage from "@teachablemachine/image";
@@ -19,11 +19,17 @@ interface FocusDetectionProps {
 
 const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null); // Hidden canvas for Python frames
   const streamRef = useRef<MediaStream | null>(null);
   const modelRef = useRef<tmImage.CustomMobileNet | null>(null);
   const animationFrameRef = useRef<number>();
+  
   const distractedTimeRef = useRef<number>(0);
-  const focusedTimeRef = useRef<number>(0); // Track focused time to confirm focus
+  const focusedTimeRef = useRef<number>(0);
+  
+  // Python State tracking inside refs to avoid stale closures in intervals
+  const pythonEyesDetectedRef = useRef<boolean | null>(null); 
+  const [pythonStatus, setPythonStatus] = useState<boolean | null>(null);
 
   const [focusState, setFocusState] = useState<FocusState>({
     isFocused: false,
@@ -60,17 +66,56 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
 
     startWebcam();
 
+    // Start the Python Hybrid check interval (Runs 1 time per second)
+    const pythonInterval = setInterval(checkPythonBackend, 1000);
+
     return () => {
+      clearInterval(pythonInterval);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
-      // Stop alarm when component unmounts
       stopContinuousAlarm();
     };
   }, []);
+
+  // --- HYBRID FEATURE: Communicate with Python server.py ---
+  const checkPythonBackend = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    
+    try {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Draw current video frame to hidden canvas
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      // Convert to base64 (Lower quality to make the HTTP request fast)
+      const base64Image = canvas.toDataURL('image/jpeg', 0.5);
+
+      // Send to Flask server
+      const response = await fetch("http://localhost:5000/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64Image })
+      });
+
+      const data = await response.json();
+      pythonEyesDetectedRef.current = data.eyes_detected;
+      setPythonStatus(data.eyes_detected);
+
+    } catch (err) {
+      // If Python server is not running, we degrade gracefully to just TM model
+      pythonEyesDetectedRef.current = null;
+      setPythonStatus(null);
+    }
+  };
 
   const loadModel = async () => {
     try {
@@ -101,32 +146,30 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
         const sortedPredictions = predictions.sort((a, b) => b.probability - a.probability);
         const topPrediction = sortedPredictions[0];
         
-        // Check if focused with high confidence (>60%)
-        const isFocused = 
-          topPrediction.className.toLowerCase().includes("focused");
-        
+        // 1. Teachable Machine Model Check
+        const isTmFocused = topPrediction.className.toLowerCase().includes("focused");
         const confidence = topPrediction.probability;
+
+        // 2. Hybrid Check (Combine TM model with Python Eye Detection)
+        // If Python is offline (null), we just use TM. Otherwise, BOTH must be true.
+        const pythonEyes = pythonEyesDetectedRef.current;
+        const isFocused = isTmFocused && (pythonEyes === null || pythonEyes === true);
 
         // Handle distraction tracking and alarm
         if (!isFocused) {
-          distractedTimeRef.current += 1; // Increment distraction counter
-          focusedTimeRef.current = 0; // Reset focus counter
+          distractedTimeRef.current += 1; 
+          focusedTimeRef.current = 0; 
           
-          // Start alarm after 15 seconds of continuous distraction
           if (distractedTimeRef.current >= 15 && !isAlarmPlaying()) {
-            console.log("🚨 Starting continuous alarm - student distracted for 15s!");
             startContinuousAlarm(1200, 400, 300);
             setAlarmActive(true);
             onDistractedTooLong?.();
           }
         } else {
-          // Student is FOCUSED
-          distractedTimeRef.current = 0; // Reset distraction counter
-          focusedTimeRef.current += 1; // Increment focus counter
+          distractedTimeRef.current = 0; 
+          focusedTimeRef.current += 1; 
           
-          // Stop alarm after being focused for 2 seconds (confirms focus)
           if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
-            console.log("✅ Student focused for 2s - stopping alarm!");
             stopContinuousAlarm();
             setAlarmActive(false);
           }
@@ -152,6 +195,9 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
 
   return (
     <div className="space-y-4">
+      {/* Hidden canvas for extracting frames for Python */}
+      <canvas ref={canvasRef} style={{ display: "none" }} />
+
       <div className="relative rounded-lg overflow-hidden bg-black/50 aspect-video">
         <video
           ref={videoRef}
@@ -162,7 +208,14 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           style={{ transform: "scaleX(-1)" }}
         />
         
-        {/* Alarm indicator overlay */}
+        {/* Python Eye Tracking Status Overlay */}
+        <div className="absolute top-4 left-4 bg-black/60 px-3 py-1.5 rounded-full flex items-center gap-2 text-sm backdrop-blur-md">
+          <Eye className={`h-4 w-4 ${pythonStatus === true ? 'text-green-400' : pythonStatus === false ? 'text-red-400' : 'text-gray-400'}`} />
+          <span className="text-white/80 font-medium">
+            {pythonStatus === true ? "Eyes Detected (Python)" : pythonStatus === false ? "No Eyes (Python)" : "Python Server Offline"}
+          </span>
+        </div>
+        
         {alarmActive && (
           <div className="absolute top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 animate-pulse shadow-lg">
             <Bell className="h-5 w-5 animate-bounce" />
@@ -174,7 +227,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           <div className="absolute inset-0 flex items-center justify-center bg-black/70">
             <div className="text-center">
               <Loader2 className="h-12 w-12 mx-auto mb-2 animate-spin" />
-              <p className="text-lg">Loading detection model...</p>
+              <p className="text-lg">Loading hybrid detection models...</p>
             </div>
           </div>
         )}
@@ -187,7 +240,6 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
         </Alert>
       ) : focusState.status === "detecting" ? (
         <div className="space-y-3">
-          {/* Alarm warning banner */}
           {alarmActive && (
             <div className="bg-red-500/20 border-2 border-red-500 rounded-lg p-4 flex items-start gap-3 animate-pulse">
               <Bell className="h-6 w-6 text-red-400 mt-0.5 animate-bounce" />
@@ -217,7 +269,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
                   <AlertCircle className="h-6 w-6 text-yellow-400" />
                   <div>
                     <span className="font-semibold text-yellow-400 text-lg">
-                      {focusState.predictions?.[0]?.className}
+                      Distracted
                     </span>
                     <p className="text-xs text-white/70">
                       {distractedTimeRef.current}s distracted
@@ -231,24 +283,10 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
               <span className="text-2xl font-bold">
                 {(focusState.confidence * 100).toFixed(0)}%
               </span>
-              <p className="text-xs text-white/70">Confidence</p>
+              <p className="text-xs text-white/70">AI Confidence</p>
             </div>
           </div>
 
-          {focusState.predictions && (
-            <div className="space-y-2 p-3 bg-white/5 rounded-lg">
-              <p className="text-sm font-semibold mb-2">Detection Breakdown:</p>
-              {focusState.predictions.map((pred) => (
-                <div key={pred.className} className="space-y-1">
-                  <div className="flex justify-between text-sm">
-                    <span>{pred.className}</span>
-                    <span>{(pred.probability * 100).toFixed(1)}%</span>
-                  </div>
-                  <Progress value={pred.probability * 100} className="h-2" />
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       ) : null}
     </div>

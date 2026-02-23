@@ -61,7 +61,6 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
   }, [autoStart]);
 
   const cleanup = async () => {
-    // Stop gaming alarm when cleaning up
     stopGamingAlarm();
     
     if (streamRef.current) {
@@ -84,42 +83,28 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
       setIsInitializing(true);
       setOcrStatus("Requesting screen access...");
 
-      // Step 1: Request screen sharing
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: "monitor",
-        },
+        video: { displaySurface: "monitor" },
         audio: false,
         preferCurrentTab: false,
       });
 
-      // Validate that entire screen was shared
       const videoTrack = stream.getVideoTracks()[0];
       const settings = videoTrack.getSettings();
-      
-      // @ts-ignore - displaySurface exists but not in TS types
+      // @ts-ignore
       const displaySurface = settings.displaySurface;
       
-      console.log("Screen share settings:", settings);
-
       if (displaySurface && displaySurface !== "monitor") {
-        // User selected window or tab instead of entire screen
         stream.getTracks().forEach(track => track.stop());
-        
-        setError(
-          "❌ You must share your ENTIRE SCREEN, not a window or tab. Please click 'Share Screen' again and select 'Entire Screen'."
-        );
+        setError("❌ You must share your ENTIRE SCREEN, not a window or tab. Please click 'Share Screen' again and select 'Entire Screen'.");
         setIsInitializing(false);
         return;
       }
 
       streamRef.current = stream;
-
-      // Step 2: Load text classifier model
       setOcrStatus("Loading AI model...");
       await textClassifier.load();
 
-      // Step 3: Initialize Tesseract OCR
       setOcrStatus("Initializing OCR engine...");
       const worker = await createWorker('eng', 1, {
         logger: (m) => {
@@ -130,18 +115,15 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
       });
       ocrWorkerRef.current = worker;
 
-      // Create hidden video element
       const video = document.createElement('video');
       video.srcObject = stream;
       video.autoplay = true;
       video.muted = true;
       videoRef.current = video;
 
-      // Create canvas
       const canvas = document.createElement('canvas');
       canvasRef.current = canvas;
 
-      // Wait for video to load
       await new Promise((resolve) => {
         video.onloadedmetadata = () => {
           video.play();
@@ -153,17 +135,13 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
       setIsInitializing(false);
       setOcrStatus("Active - Detecting every 10s");
 
-      // Listen for when user stops sharing
       stream.getVideoTracks()[0].addEventListener('ended', () => {
         stopScreenShare();
       });
 
-      // Start detection loop
       startDetectionLoop();
 
     } catch (err: any) {
-      console.error("Screen share error:", err);
-      
       if (err.name === "NotAllowedError") {
         setError("❌ Screen sharing was denied. Please click 'Share Screen' and allow access.");
       } else if (err.name === "NotFoundError") {
@@ -171,7 +149,6 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
       } else {
         setError(`❌ Error: ${err.message || "Screen sharing failed"}`);
       }
-      
       setIsSharing(false);
       setIsInitializing(false);
       await cleanup();
@@ -195,18 +172,13 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
   };
 
   const performOCRAndClassify = async () => {
-    if (!videoRef.current || !canvasRef.current || !ocrWorkerRef.current) {
-      console.error("Detection components not ready");
-      return;
-    }
+    if (!videoRef.current || !canvasRef.current || !ocrWorkerRef.current) return;
 
     try {
       setOcrStatus("Capturing screen...");
-
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
-      
       if (!ctx) return;
 
       canvas.width = video.videoWidth;
@@ -216,21 +188,12 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
       setOcrStatus("Extracting text...");
       const { data: { text } } = await ocrWorkerRef.current.recognize(canvas);
 
-      const cleanText = text
-        .toLowerCase()
-        .replace(/[^\w\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      console.log("📝 OCR extracted:", cleanText.substring(0, 200));
+      const cleanText = text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
       setLastOcrText(cleanText.substring(0, 500));
 
       if (cleanText.length > 20) {
         setOcrStatus("Analyzing activity...");
-        
         const result = await textClassifier.predict(cleanText);
-        
-        console.log("🤖 AI prediction:", result);
 
         setActivityResult({
           activity: result.class,
@@ -242,35 +205,19 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
           }
         });
 
-        // 🚨 GAMING DETECTION ALARM
-        // 🚨 NEW CODE - Alarm only stops when Studying or Coding detected
-if (result.class === "Gaming") {
-  setGamingDetectedCount(prev => prev + 1);
-  
-  // Start alarm and keep it running
-  startGamingAlarm();
-  console.log("🚨 GAMING DETECTED - CONTINUOUS ALARM ACTIVE!");
-  
-} else if (result.class === "Studying" || result.class === "Coding") {
-  // Only stop alarm when productive activity is detected
-  setGamingDetectedCount(0);
-  stopGamingAlarm();
-  console.log("✅ Productive activity detected - Alarm stopped");
-  
-} else {
-  // For any other state (unknown/error), keep alarm if it was running
-  // This ensures alarm doesn't stop accidentally
-  console.log("⚠️ Unknown activity - Alarm state unchanged");
-}
-
+        if (result.class === "Gaming") {
+          setGamingDetectedCount(prev => prev + 1);
+          startGamingAlarm();
+        } else if (result.class === "Studying" || result.class === "Coding") {
+          setGamingDetectedCount(0);
+          stopGamingAlarm();
+        }
 
         setOcrStatus("Active - Next scan in 10s");
       } else {
         setOcrStatus("Not enough text detected");
       }
-
     } catch (error) {
-      console.error("Detection error:", error);
       setOcrStatus("Detection failed - retrying...");
     }
   };
@@ -296,11 +243,7 @@ if (result.class === "Gaming") {
             </p>
           </div>
 
-          <Button
-            onClick={startScreenShare}
-            className="bg-blue-500 hover:bg-blue-600"
-            size="lg"
-          >
+          <Button onClick={startScreenShare} className="bg-blue-500 hover:bg-blue-600" size="lg">
             <Share2 className="h-4 w-4 mr-2" />
             Share Screen & Start Detection
           </Button>
@@ -312,12 +255,7 @@ if (result.class === "Gaming") {
             </div>
           )}
 
-          <div className="mt-4 text-xs text-white/50 space-y-1">
-            <p>✅ OCR extracts on-screen text</p>
-            <p>✅ AI detects: Studying / Coding / Gaming</p>
-            <p>✅ Updates every 10 seconds</p>
-            <p>🚨 Alarm triggers if Gaming detected</p>
-          </div>
+           {/* FIX: Removed the list of technical features ("OCR extracts...", etc.) */}
         </div>
       ) : isInitializing ? (
         <div className="text-center py-8">
@@ -342,7 +280,6 @@ if (result.class === "Gaming") {
             </Button>
           </div>
 
-          {/* 🚨 GAMING WARNING BANNER */}
           {activityResult?.activity === "Gaming" && (
             <div className="p-4 bg-red-500/20 border-2 border-red-500 rounded-lg animate-pulse">
               <div className="flex items-start gap-3">
@@ -363,7 +300,6 @@ if (result.class === "Gaming") {
             </div>
           )}
 
-          {/* Current Activity Card */}
           {activityResult && (
             <div className={`p-4 rounded-lg bg-${getActivityColor()}-500/20 border-2 border-${getActivityColor()}-500`}>
               <div className="flex items-center justify-between mb-3">
@@ -382,7 +318,6 @@ if (result.class === "Gaming") {
                 </div>
               </div>
 
-              {/* Probability Breakdown */}
               <div className="space-y-2 mt-3 pt-3 border-t border-white/10">
                 {Object.entries(activityResult.probabilities).map(([activity, prob]) => (
                   <div key={activity} className="space-y-1">
@@ -402,7 +337,6 @@ if (result.class === "Gaming") {
             </div>
           )}
 
-          {/* Extracted Text Preview */}
           {lastOcrText && (
             <div className="p-3 bg-white/5 rounded text-xs font-mono text-white/60 max-h-20 overflow-y-auto">
               <p className="font-bold text-white/80 mb-1">📝 OCR Text:</p>
@@ -410,13 +344,7 @@ if (result.class === "Gaming") {
             </div>
           )}
 
-          {/* Info Footer */}
-          <div className="p-2 bg-white/5 rounded text-xs text-white/50 space-y-1">
-            <p>🔍 Using real OCR (Tesseract.js) + Your trained TF.js model</p>
-            <p>🔄 Auto-detects every 10 seconds</p>
-            <p>🧠 Model: /public/models/text-activity/model.json</p>
-            <p>🚨 Gaming alarm: Triple beep every 10s when gaming detected</p>
-          </div>
+          {/* FIX: Removed the "Info Footer" containing the text "Using real OCR... " entirely */}
         </div>
       )}
     </div>

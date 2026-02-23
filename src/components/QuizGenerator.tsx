@@ -33,8 +33,7 @@ const QuizGenerator = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
 
-  // 🔑 API KEY
-  const GEMINI_API_KEY = "AIzaSyCuVmJQUcLrJzeRluBeuanoBQkTJXTUJnI";
+  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 
   const generateQuiz = async () => {
     if (!concepts.trim()) {
@@ -42,9 +41,10 @@ const QuizGenerator = () => {
       return;
     }
 
+    // FIX: Increased limit validation to 100
     const count = parseInt(questionCount);
-    if (isNaN(count) || count < 1 || count > 20) {
-      setError("Please enter a number between 1 and 20");
+    if (isNaN(count) || count < 1 || count > 100) {
+      setError("Please enter a number between 1 and 100");
       return;
     }
 
@@ -53,43 +53,23 @@ const QuizGenerator = () => {
     setStep('generating');
 
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{
-              parts: [{
-                text: `Generate exactly ${count} multiple-choice quiz questions about: "${concepts}"
-
-Rules:
-- Create ${count} questions testing understanding of these concepts
-- Each question must have exactly 4 options labeled A, B, C, D
-- Provide the correct answer as a single letter (A, B, C, or D)
-- Add a brief explanation for why the answer is correct
-
-IMPORTANT: Return ONLY a JSON array with no markdown formatting, no code blocks, no extra text:
-
-[
-  {
-    "question": "What is Python?",
-    "options": ["A) A snake", "B) A programming language", "C) A calculator", "D) A game"],
-    "correctAnswer": "B",
-    "explanation": "Python is a high-level programming language used for software development."
-  }
-]
-
-Return ONLY the JSON array, nothing else.`
-              }]
-            }],
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 2048,
-            }
-          })
-        }
-      );
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.5, // Lower temperature for more structured output
+          // FIX: Increased max_tokens significantly to ensure large JSON arrays don't get cut off
+          max_tokens: 8000, 
+          messages: [{
+            role: "user",
+            content: `Generate exactly ${count} multiple-choice quiz questions about: "${concepts}"\n\nRules:\n- Create exactly ${count} questions testing understanding of these concepts\n- Each question must have exactly 4 options labeled A, B, C, D\n- Provide the correct answer as a single letter (A, B, C, or D)\n- Add a brief explanation for why the answer is correct\n\nIMPORTANT: Return ONLY a JSON array with no markdown formatting, no code blocks, no extra text:\n\n[\n  {\n    "question": "What is Python?",\n    "options": ["A) A snake", "B) A programming language", "C) A calculator", "D) A game"],\n    "correctAnswer": "B",\n    "explanation": "Python is a high-level programming language used for software development."\n  }\n]\n\nReturn ONLY the JSON array, nothing else.`
+          }]
+        })
+      });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -98,39 +78,41 @@ Return ONLY the JSON array, nothing else.`
       }
 
       const data = await response.json();
-      
-      if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-        throw new Error("Invalid API response");
-      }
+      const generatedText = data.choices[0].message.content;
+      console.log("Raw AI response length:", generatedText.length);
 
-      const generatedText = data.candidates[0].content.parts[0].text;
-      console.log("Raw AI response:", generatedText);
-
-      // ✅ IMPROVED JSON CLEANING
       let jsonText = generatedText.trim();
-      
-      // Remove all markdown code blocks and backticks
-     jsonText = jsonText.replace(/```json\s*/gi, '');
+      // Cleanup potential markdown if the AI still adds it
+      jsonText = jsonText.replace(/```json\s*/gi, '');
       jsonText = jsonText.replace(/```\s*/g, '');
       jsonText = jsonText.replace(/`/g, '');
       
-      // Extract only the JSON array part [...]
+      // Attempt to find array brackets if there's surrounding text
       const startIndex = jsonText.indexOf('[');
       const endIndex = jsonText.lastIndexOf(']');
       
       if (startIndex === -1 || endIndex === -1) {
-        console.error("No JSON array found in:", jsonText);
-        throw new Error("AI didn't return a valid JSON array");
+        console.error("Could not find JSON brackets in response:", jsonText);
+        throw new Error("AI response was not valid JSON");
       }
       
       jsonText = jsonText.substring(startIndex, endIndex + 1);
-      console.log("Cleaned JSON:", jsonText);
       
-      // Parse JSON
-      const parsedQuestions = JSON.parse(jsonText);
+      let parsedQuestions;
+      try {
+          parsedQuestions = JSON.parse(jsonText);
+      } catch (parseError) {
+          console.error("JSON Parse Error:", parseError, "JSON Text:", jsonText);
+          throw new Error("Failed to parse AI response. Try fewer questions or different concepts.");
+      }
       
       if (!Array.isArray(parsedQuestions) || parsedQuestions.length === 0) {
-        throw new Error("No questions generated");
+        throw new Error("No questions generated correctly");
+      }
+
+      // Verify count roughly matches (allow small variance if model miscounts slightly)
+      if (Math.abs(parsedQuestions.length - count) > 2 && count < 10) {
+         console.warn(`Requested ${count} but got ${parsedQuestions.length}`);
       }
 
       setQuestions(parsedQuestions);
@@ -139,7 +121,7 @@ Return ONLY the JSON array, nothing else.`
       
     } catch (err: any) {
       console.error("Quiz generation error:", err);
-      setError(`Failed: ${err.message}`);
+      setError(`Failed: ${err.message || "Could not generate quiz"}`);
       setStep('concepts');
     } finally {
       setIsGenerating(false);
@@ -181,7 +163,6 @@ Return ONLY the JSON array, nothing else.`
     return correct;
   };
 
-  // STEP 1: Concept Input
   if (step === 'concepts') {
     return (
       <Card className="p-8 max-w-2xl mx-auto bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-950 dark:to-blue-950">
@@ -214,23 +195,24 @@ Return ONLY the JSON array, nothing else.`
 
           <div>
             <label className="block text-sm font-medium mb-2">
-              How many questions do you want?
+              How many questions do you want? (Max 100)
             </label>
             <div className="flex gap-2">
-              {["3", "5", "10"].map((num) => (
+              {["5", "10", "20"].map((num) => (
                 <Button
                   key={num}
                   variant={questionCount === num ? "default" : "outline"}
                   onClick={() => setQuestionCount(num)}
                   className="flex-1"
                 >
-                  {num} Questions
+                  {num}
                 </Button>
               ))}
               <Input
                 type="number"
                 min="1"
-                max="20"
+                // FIX: Updated max input to 100
+                max="100"
                 value={questionCount}
                 onChange={(e) => setQuestionCount(e.target.value)}
                 className="w-24"
@@ -252,14 +234,13 @@ Return ONLY the JSON array, nothing else.`
             disabled={!concepts.trim() || isGenerating}
           >
             <Sparkles className="w-4 h-4 mr-2" />
-            Generate Quiz with AI
+            {isGenerating ? `Generating ${questionCount} questions...` : "Generate Quiz with AI"}
           </Button>
         </div>
       </Card>
     );
   }
 
-  // STEP 2: Generating
   if (step === 'generating') {
     return (
       <Card className="p-8 max-w-2xl mx-auto">
@@ -270,19 +251,22 @@ Return ONLY the JSON array, nothing else.`
             AI is creating {questionCount} custom questions based on: <br />
             <span className="font-semibold text-foreground">"{concepts}"</span>
           </p>
+          {parseInt(questionCount) > 20 && (
+             <p className="text-sm text-muted-foreground animate-pulse">
+                Generating many questions may take a bit longer...
+             </p>
+          )}
         </div>
       </Card>
     );
   }
 
-  // STEP 3: Quiz
   if (step === 'quiz' && questions.length > 0) {
     const currentQ = questions[currentQuestionIndex];
     const isAnswered = userAnswers[currentQuestionIndex] !== "";
 
     return (
       <Card className="p-8 max-w-3xl mx-auto">
-        {/* Progress */}
         <div className="mb-6">
           <div className="flex justify-between text-sm mb-2">
             <span>Question {currentQuestionIndex + 1} of {questions.length}</span>
@@ -291,13 +275,14 @@ Return ONLY the JSON array, nothing else.`
           <Progress value={((currentQuestionIndex + 1) / questions.length) * 100} />
         </div>
 
-        {/* Question */}
         <div className="mb-6">
           <h3 className="text-2xl font-bold mb-4">{currentQ.question}</h3>
           
           <div className="space-y-3">
             {currentQ.options?.map((option, idx) => {
-              const letter = option.charAt(0);
+              // Ensure option is a string before trying to get charAt
+              const optionText = typeof option === 'string' ? option : JSON.stringify(option);
+              const letter = optionText.charAt(0);
               const isSelected = userAnswers[currentQuestionIndex] === letter;
               const isCorrectOption = letter === currentQ.correctAnswer;
               
@@ -323,7 +308,7 @@ Return ONLY the JSON array, nothing else.`
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex-1">{option}</div>
+                    <div className="flex-1">{optionText}</div>
                     {showAnswer && isCorrectOption && (
                       <CheckCircle className="w-5 h-5 text-green-500" />
                     )}
@@ -337,7 +322,6 @@ Return ONLY the JSON array, nothing else.`
           </div>
         </div>
 
-        {/* Explanation */}
         {showAnswer && currentQ.explanation && (
           <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
             <p className="font-semibold mb-1">💡 Explanation:</p>
@@ -345,7 +329,6 @@ Return ONLY the JSON array, nothing else.`
           </div>
         )}
 
-        {/* Actions */}
         <div className="flex gap-3">
           {!showAnswer && isAnswered && (
             <Button onClick={() => setShowAnswer(true)} className="flex-1">
@@ -367,7 +350,6 @@ Return ONLY the JSON array, nothing else.`
     );
   }
 
-  // STEP 4: Results
   if (step === 'results') {
     const score = calculateScore();
     const percentage = (score / questions.length) * 100;

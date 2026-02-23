@@ -3,7 +3,6 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { X, Send, Loader2 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { useToast } from "@/hooks/use-toast";
 
 interface ChatbotProps {
@@ -27,7 +26,7 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  const genAI = new GoogleGenerativeAI("AIzaSyAjsN7dYCGTJSpkDUX9ddvrBC7VtmKTGMA");
+  const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 
   useEffect(() => {
     scrollToBottom();
@@ -41,23 +40,32 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMessage]);
+    const currentMessages = [...messages, userMessage];
+    setMessages(currentMessages);
     setInput("");
     setIsLoading(true);
 
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
-      
-      const chat = model.startChat({
-        history: messages.map((msg) => ({
-          role: msg.role === "assistant" ? "model" : "user",
-          parts: [{ text: msg.content }],
-        })),
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: currentMessages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+        })
       });
 
-      const result = await chat.sendMessage(input);
-      const response = await result.response;
-      const text = response.text();
+      const data = await response.json();
+      
+      if (!response.ok) throw new Error(data.error?.message || "Groq API error");
+
+      const text = data.choices[0].message.content;
 
       setMessages((prev) => [
         ...prev,
@@ -84,7 +92,6 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
 
   return (
     <Card className="h-full flex flex-col shadow-2xl border-2">
-      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-primary to-accent">
         <h3 className="font-semibold text-primary-foreground">AI Focus Assistant</h3>
         <Button
@@ -97,7 +104,6 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
         </Button>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (
           <div
@@ -127,7 +133,6 @@ const Chatbot = ({ onClose }: ChatbotProps) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
       <div className="p-4 border-t">
         <div className="flex gap-2">
           <Input

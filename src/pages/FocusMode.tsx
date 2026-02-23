@@ -29,38 +29,33 @@ import AIFocusAssistant from "@/components/AIFocusAssistant";
 import QuizGenerator from "@/components/QuizGenerator";
 import { useToast } from "@/hooks/use-toast";
 
-// --- Firebase Imports ---
 import { collection, addDoc } from "firebase/firestore";
-import { db } from "../firebaseConfig"; // Your Firebase config file
+import { db } from "../firebaseConfig"; 
 
 const FocusMode = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { toast } = useToast();
 
-  // --- Get data from URL ---
   const userId = searchParams.get("userId");
   const durationMinutes = parseInt(searchParams.get("duration") || "25");
   const screenGranted = searchParams.get("screenGranted") === "true";
   const initialDuration = durationMinutes * 60;
 
-  // --- State Management ---
-  const [sessionStartTime] = useState(new Date()); // Record session start time
+  const [sessionStartTime] = useState(new Date()); 
   const [timeRemaining, setTimeRemaining] = useState(initialDuration);
   const [isPaused, setIsPaused] = useState(false);
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
   const [showQuiz, setShowQuiz] = useState(false);
 
-  // Section visibility toggles
   const [showCamera, setShowCamera] = useState(true);
   const [showScreen, setShowScreen] = useState(true);
   const [showAssistant, setShowAssistant] = useState(true);
 
-  // --- Timer Logic ---
   useEffect(() => {
     if (isPaused || timeRemaining <= 0 || showQuiz) {
       if (timeRemaining <= 0 && !showCompletionDialog && !showQuiz) {
-        handleSessionEnd(true); // Call end function when timer reaches zero
+        handleSessionEnd(true); 
       }
       return;
     }
@@ -72,13 +67,8 @@ const FocusMode = () => {
     return () => clearInterval(interval);
   }, [isPaused, timeRemaining, showCompletionDialog, showQuiz]);
 
-
-  // --- Data Saving and Navigation ---
-
   const handleSessionEnd = async (completed: boolean) => {
     if (!userId) {
-      console.error("No user ID found, cannot save session.");
-      // If no user, just show the quiz without saving
       setShowCompletionDialog(completed);
       setTimeout(() => {
         setShowCompletionDialog(false);
@@ -88,7 +78,6 @@ const FocusMode = () => {
     }
 
     try {
-      // Save the focus session data to Firestore
       await addDoc(collection(db, `students/${userId}/focus_sessions`), {
         startTime: sessionStartTime.toISOString(),
         endTime: new Date().toISOString(),
@@ -100,11 +89,9 @@ const FocusMode = () => {
         toast({ title: "Focus Session Saved!", description: "Great work!" });
       }
     } catch (error) {
-      console.error("Error saving focus session:", error);
       toast({ variant: "destructive", title: "Save Error", description: "Could not save your focus session data." });
     }
 
-    // Show completion dialog if finished, then transition to quiz
     if (completed) {
       setShowCompletionDialog(true);
       setTimeout(() => {
@@ -112,20 +99,17 @@ const FocusMode = () => {
         setShowQuiz(true);
       }, 3000);
     } else {
-      // If exiting early, go straight to the quiz
       setShowQuiz(true);
     }
   };
 
   const handleQuizSubmit = async (topic: string, score: number, totalQuestions: number) => {
     if (!userId) {
-      console.error("No user ID found, cannot save quiz result.");
-      navigate("/"); // Just go home if no user
+      navigate("/"); 
       return;
     }
 
     try {
-        // Save quiz result to Firestore
         await addDoc(collection(db, `students/${userId}/quiz_results`), {
             topic: topic,
             score: score,
@@ -134,11 +118,10 @@ const FocusMode = () => {
         });
         toast({ title: "Quiz Result Saved!", description: `You scored ${score}/${totalQuestions}.` });
     } catch (error) {
-        console.error("Error saving quiz result:", error);
         toast({ variant: "destructive", title: "Save Error", description: "Could not save your quiz result." });
     }
 
-    navigate("/"); // Navigate home after quiz submission
+    navigate("/"); 
   };
 
   const handleExitEarly = () => {
@@ -151,7 +134,6 @@ const FocusMode = () => {
     navigate("/");
   };
 
-  // --- UI Helper Functions ---
   const formatTime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -170,7 +152,6 @@ const FocusMode = () => {
     return ((initialDuration - timeRemaining) / initialDuration) * 100;
   };
 
-  // --- Conditional Rendering for Quiz Screen ---
   if (showQuiz) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-6 flex items-center justify-center">
@@ -190,7 +171,6 @@ const FocusMode = () => {
     );
   }
 
-  // --- Main Focus Mode UI ---
   return (
     <>
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-6">
@@ -283,22 +263,7 @@ const FocusMode = () => {
           </Card>
         </div>
 
-        <div className="max-w-7xl mx-auto mt-6">
-          <Card className="bg-white/5 backdrop-blur-md border-white/10 p-4">
-            <div className="flex items-center justify-between text-sm text-white/60">
-              <div className="flex items-center gap-6">
-                <span>🎯 Focus Mode Active</span>
-                <span>📹 Camera: Monitoring</span>
-                <span>🖥️ Screen: Analyzing</span>
-                <span>🤖 AI: Ready</span>
-                <span>⏱️ Duration: {durationMinutes} min</span>
-              </div>
-              <div>
-                <span>Press Exit to take a quiz</span>
-              </div>
-            </div>
-          </Card>
-        </div>
+        {/* FIX: Removed the bottom status Card entirely from here */}
       </div>
 
       <Dialog open={showCompletionDialog}>
