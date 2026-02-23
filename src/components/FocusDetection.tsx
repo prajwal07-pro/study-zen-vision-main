@@ -5,6 +5,13 @@ import { Progress } from "@/components/ui/progress";
 import * as tmImage from "@teachablemachine/image";
 import { startContinuousAlarm, stopContinuousAlarm, isAlarmPlaying } from "@/utils/beep";
 
+// Allow TypeScript to recognize the globally loaded OpenCV.js
+declare global {
+  interface Window {
+    cv: any;
+  }
+}
+
 interface FocusState {
   isFocused: boolean;
   confidence: number;
@@ -19,17 +26,20 @@ interface FocusDetectionProps {
 
 const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null); // Hidden canvas for Python frames
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const modelRef = useRef<tmImage.CustomMobileNet | null>(null);
   const animationFrameRef = useRef<number>();
+  
+  // Model Refs
+  const tmModelRef = useRef<tmImage.CustomMobileNet | null>(null);
+  const faceCascadeRef = useRef<any>(null);
+  const eyeCascadeRef = useRef<any>(null);
   
   const distractedTimeRef = useRef<number>(0);
   const focusedTimeRef = useRef<number>(0);
   
-  // Python State tracking inside refs to avoid stale closures in intervals
-  const pythonEyesDetectedRef = useRef<boolean | null>(null); 
-  const [pythonStatus, setPythonStatus] = useState<boolean | null>(null);
+  // Real-time eye tracking status
+  const [eyesDetected, setEyesDetected] = useState<boolean>(false);
 
   const [focusState, setFocusState] = useState<FocusState>({
     isFocused: false,
@@ -51,7 +61,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           streamRef.current = stream;
           videoRef.current.onloadedmetadata = () => {
             videoRef.current?.play();
-            loadModel();
+            waitForOpenCV();
           };
         }
       } catch (err) {
@@ -66,11 +76,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
 
     startWebcam();
 
-    // Start the Python Hybrid check interval (Runs 1 time per second)
-    const pythonInterval = setInterval(checkPythonBackend, 1000);
-
     return () => {
-      clearInterval(pythonInterval);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -78,115 +84,159 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
         cancelAnimationFrame(animationFrameRef.current);
       }
       stopContinuousAlarm();
+      
+      // Cleanup OpenCV objects
+      if (faceCascadeRef.current) faceCascadeRef.current.delete();
+      if (eyeCascadeRef.current) eyeCascadeRef.current.delete();
     };
   }, []);
 
-  // --- HYBRID FEATURE: Communicate with Python server.py ---
-  const checkPythonBackend = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    
-    try {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      // Draw current video frame to hidden canvas
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-
-      // Convert to base64 (Lower quality to make the HTTP request fast)
-      const base64Image = canvas.toDataURL('image/jpeg', 0.5);
-
-      // Send to Flask server
-      const response = await fetch("http://localhost:5000/detect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64Image })
-      });
-
-      const data = await response.json();
-      pythonEyesDetectedRef.current = data.eyes_detected;
-      setPythonStatus(data.eyes_detected);
-
-    } catch (err) {
-      // If Python server is not running, we degrade gracefully to just TM model
-      pythonEyesDetectedRef.current = null;
-      setPythonStatus(null);
-    }
+  // Poll until the OpenCV.js script fully loads from index.html
+  const waitForOpenCV = () => {
+    const checkCv = setInterval(() => {
+      if (window.cv && window.cv.Mat) {
+        clearInterval(checkCv);
+        loadModels();
+      }
+    }, 200);
   };
 
-  const loadModel = async () => {
+  const loadFileToOpenCV = async (url: string, path: string) => {
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+    const data = new Uint8Array(buffer);
+    window.cv.FS_createDataFile('/', path, data, true, false, false);
+  };
+
+  const loadModels = async () => {
     try {
+      const cv = window.cv;
+      
+      // 1. Load Custom Teachable Machine Posture Model
       const modelURL = window.location.origin + "/models/model.json";
       const metadataURL = window.location.origin + "/models/metadata.json";
+      const tmModel = await tmImage.load(modelURL, metadataURL);
+      tmModelRef.current = tmModel;
       
-      const model = await tmImage.load(modelURL, metadataURL);
-      modelRef.current = model;
+      // 2. Load OpenCV Haar Cascades
+      setFocusState(prev => ({ ...prev, status: "loading" }));
+      
+      await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
+      await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
+
+      faceCascadeRef.current = new cv.CascadeClassifier();
+      faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
+
+      eyeCascadeRef.current = new cv.CascadeClassifier();
+      eyeCascadeRef.current.load('haarcascade_eye.xml');
       
       setFocusState((prev) => ({ ...prev, status: "ready" }));
       startDetection();
     } catch (error) {
+      console.error("Model load error:", error);
       setFocusState({
         isFocused: false,
         confidence: 0,
         status: "error",
-        error: "Model loading failed. Check if model files are in public/models/",
+        error: "Failed to load AI models. Please ensure XML files are in public/models/.",
       });
     }
   };
 
   const startDetection = () => {
+    const cv = window.cv;
+    
     const detect = async () => {
-      if (!videoRef.current || !modelRef.current) return;
+      if (!videoRef.current || !canvasRef.current || !tmModelRef.current || !faceCascadeRef.current) return;
 
       try {
-        const predictions = await modelRef.current.predict(videoRef.current);
-        const sortedPredictions = predictions.sort((a, b) => b.probability - a.probability);
+        // --- 1. RUN TEACHABLE MACHINE POSTURE CHECK ---
+        const tmPredictions = await tmModelRef.current.predict(videoRef.current);
+        const sortedPredictions = tmPredictions.sort((a, b) => b.probability - a.probability);
         const topPrediction = sortedPredictions[0];
-        
-        // 1. Teachable Machine Model Check
         const isTmFocused = topPrediction.className.toLowerCase().includes("focused");
         const confidence = topPrediction.probability;
 
-        // 2. Hybrid Check (Combine TM model with Python Eye Detection)
-        // If Python is offline (null), we just use TM. Otherwise, BOTH must be true.
-        const pythonEyes = pythonEyesDetectedRef.current;
-        const isFocused = isTmFocused && (pythonEyes === null || pythonEyes === true);
+        // --- 2. RUN OPENCV.JS HAAR CASCADE EYE DETECTION ---
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        if (ctx) {
+          // Draw video frame to hidden canvas for OpenCV processing
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Handle distraction tracking and alarm
-        if (!isFocused) {
-          distractedTimeRef.current += 1; 
-          focusedTimeRef.current = 0; 
+          let src = cv.imread(canvas);
+          let gray = new cv.Mat();
+          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+          let faces = new cv.RectVector();
+          // detectMultiScale(image, objects, scaleFactor, minNeighbors)
+          faceCascadeRef.current.detectMultiScale(gray, faces, 1.3, 5);
           
-          if (distractedTimeRef.current >= 15 && !isAlarmPlaying()) {
-            startContinuousAlarm(1200, 400, 300);
-            setAlarmActive(true);
-            onDistractedTooLong?.();
+          let areEyesVisible = false;
+
+          if (faces.size() > 0) {
+            let face = faces.get(0);
+            let roiGray = gray.roi(face);
+            let eyes = new cv.RectVector();
+            
+            eyeCascadeRef.current.detectMultiScale(roiGray, eyes);
+            if (eyes.size() >= 1) {
+              areEyesVisible = true;
+            }
+            
+            roiGray.delete();
+            eyes.delete();
           }
-        } else {
-          distractedTimeRef.current = 0; 
-          focusedTimeRef.current += 1; 
-          
-          if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
-            stopContinuousAlarm();
-            setAlarmActive(false);
+
+          setEyesDetected(areEyesVisible);
+
+          // Clean up C++ memory allocated by OpenCV.js
+          src.delete();
+          gray.delete();
+          faces.delete();
+
+          // --- 3. HYBRID FOCUS LOGIC ---
+          const isFocused = isTmFocused && areEyesVisible;
+
+          // Alarm and distraction logic
+          if (!isFocused) {
+            distractedTimeRef.current += 1; 
+            focusedTimeRef.current = 0; 
+            
+            if (distractedTimeRef.current >= 15 && !isAlarmPlaying()) {
+              startContinuousAlarm(1200, 400, 300);
+              setAlarmActive(true);
+              onDistractedTooLong?.();
+            }
+          } else {
+            distractedTimeRef.current = 0; 
+            focusedTimeRef.current += 1; 
+            
+            if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
+              stopContinuousAlarm();
+              setAlarmActive(false);
+            }
           }
+
+          setFocusState({
+            isFocused,
+            confidence,
+            status: "detecting",
+            predictions: sortedPredictions,
+          });
         }
 
-        setFocusState({
-          isFocused,
-          confidence,
-          status: "detecting",
-          predictions: sortedPredictions,
-        });
-
+        // Run next frame roughly every 1 second to save CPU
         setTimeout(() => {
           animationFrameRef.current = requestAnimationFrame(detect);
         }, 1000);
+
       } catch (error) {
-        console.error("Detection error:", error);
+        console.error("Detection loop error:", error);
       }
     };
 
@@ -195,8 +245,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
 
   return (
     <div className="space-y-4">
-      {/* Hidden canvas for extracting frames for Python */}
-      <canvas ref={canvasRef} style={{ display: "none" }} />
+      <canvas ref={canvasRef} className="hidden" />
 
       <div className="relative rounded-lg overflow-hidden bg-black/50 aspect-video">
         <video
@@ -208,11 +257,11 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           style={{ transform: "scaleX(-1)" }}
         />
         
-        {/* Python Eye Tracking Status Overlay */}
+        {/* OpenCV Tracking Status Overlay */}
         <div className="absolute top-4 left-4 bg-black/60 px-3 py-1.5 rounded-full flex items-center gap-2 text-sm backdrop-blur-md">
-          <Eye className={`h-4 w-4 ${pythonStatus === true ? 'text-green-400' : pythonStatus === false ? 'text-red-400' : 'text-gray-400'}`} />
+          <Eye className={`h-4 w-4 ${eyesDetected ? 'text-green-400' : 'text-red-400'}`} />
           <span className="text-white/80 font-medium">
-            {pythonStatus === true ? "Eyes Detected (Python)" : pythonStatus === false ? "No Eyes (Python)" : "Python Server Offline"}
+            {eyesDetected ? "Eyes Detected (OpenCV)" : "No Eyes Detected"}
           </span>
         </div>
         
@@ -227,7 +276,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           <div className="absolute inset-0 flex items-center justify-center bg-black/70">
             <div className="text-center">
               <Loader2 className="h-12 w-12 mx-auto mb-2 animate-spin" />
-              <p className="text-lg">Loading hybrid detection models...</p>
+              <p className="text-lg">Loading OpenCV Haar Cascades...</p>
             </div>
           </div>
         )}
@@ -283,10 +332,9 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
               <span className="text-2xl font-bold">
                 {(focusState.confidence * 100).toFixed(0)}%
               </span>
-              <p className="text-xs text-white/70">AI Confidence</p>
+              <p className="text-xs text-white/70">Posture Confidence</p>
             </div>
           </div>
-
         </div>
       ) : null}
     </div>
